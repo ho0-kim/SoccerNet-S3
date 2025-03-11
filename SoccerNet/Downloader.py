@@ -1,6 +1,8 @@
 
 import urllib.request
 import os
+import sys
+import threading
 from tqdm import tqdm
 import json
 import random
@@ -24,7 +26,22 @@ class MyProgressBar():
 
         self.pbar.update(block_size)
 
+class S3Progress(object):
 
+    def __init__(self, total_size, filename):
+        self._total_size = float(total_size)
+        self.filename = filename
+        self._seen_so_far = 0
+        self._lock = threading.Lock()
+
+    def __call__(self, bytes_amount):
+        with self._lock:
+            self._seen_so_far += bytes_amount
+            percentage = (self._seen_so_far / self._total_size) * 100
+            sys.stdout.write(
+                f"\r{self.filename} Uploaded {self._seen_so_far:.2f} / {self._total_size:.2f} bytes ({percentage:.2f}%)"
+            )
+            sys.stdout.flush()
 
 import uuid
 from google_measurement_protocol import event, report
@@ -36,7 +53,7 @@ class OwnCloudDownloader():
 
         self.client_id = uuid.uuid4()
 
-    def downloadFile(self, path_local, path_owncloud, user=None, password=None, verbose=True):
+    def downloadFile(self, path_local, path_owncloud, user=None, password=None, verbose=True, s3_bucket=None):
         # return 0: successfully downloaded
         # return 1: HTTPError
         # return 2: unsupported error
@@ -67,14 +84,26 @@ class OwnCloudDownloader():
             return 2
 
         try:
-            try:
-                os.makedirs(os.path.dirname(path_local), exist_ok=True)
-                urllib.request.urlretrieve(
-                    path_owncloud, path_local, MyProgressBar(path_local))
+            if s3_bucket:  # Stream to AWS S3 Bucket
+                print("Stream to AWS S3 Bucket")
+                try:
+                    s3_client = boto3.client('s3')
+                    with urllib.request.urlopen(path_owncloud) as response:
+                        total_size = int(response.info().get('Content-Length', 0))  # Get content size from headers
+                        s3_client.upload_fileobj(response, s3_bucket, path_local,
+                                                 Callback=S3Progress(total_size, path_local))
+                except urllib.error.HTTPError as identifier:
+                    print(identifier)
+                    return 1
+            else:   # Download to Local
+                try:
+                    os.makedirs(os.path.dirname(path_local), exist_ok=True)
+                    urllib.request.urlretrieve(
+                        path_owncloud, path_local, MyProgressBar(path_local))
 
-            except urllib.error.HTTPError as identifier:
-                print(identifier)
-                return 1
+                except urllib.error.HTTPError as identifier:
+                    print(identifier)
+                    return 1
         except:
             if os.path.exists(path_local):
                 os.remove(path_local)
@@ -147,6 +176,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
         super(SoccerNetDownloader, self).__init__(
             LocalDirectory, OwnCloudServer)
         self.password = None
+        self.s3_bucket = None
 
     def downloadDataTask(self, task, split=["train","valid","test","challenge"], verbose=True, password="SoccerNet", version=None, source="HuggingFace"): # Generic password for public data
 
@@ -170,6 +200,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             ' ', '%20').replace('\\', '/'),
                                         user="3u0ennq4n4dMDyQ",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "valid" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "valid.zip"),
@@ -177,6 +208,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             ' ', '%20').replace('\\', '/'),
                                         user="3u0ennq4n4dMDyQ",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "test" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "test.zip"),
@@ -184,6 +216,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             ' ', '%20').replace('\\', '/'),
                                         user="3u0ennq4n4dMDyQ",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "challenge" in split:
                 print("no challenge split for SN-Depth")
@@ -195,6 +228,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             ' ', '%20').replace('\\', '/'),
                                         user="nTQOU54hOiZDfGI",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "valid" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "valid.zip"),
@@ -202,6 +236,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             ' ', '%20').replace('\\', '/'),
                                         user="nTQOU54hOiZDfGI",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "test" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "test.zip"),
@@ -209,6 +244,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             ' ', '%20').replace('\\', '/'),
                                         user="nTQOU54hOiZDfGI",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "challenge" in split:
                 print("no challenge split for SN-Depth")
@@ -222,6 +258,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             # https://exrcsdrive.kaust.edu.sa/index.php/s/x2okf31MzBZRpl4 # user for SoccerNetv2 Action Spotting JSON format
                                             user="x2okf31MzBZRpl4",
                                             password=password,
+                                            s3_bucket=self.s3_bucket,
                                             verbose=verbose)
                 if "valid" in split:
                     res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, version, "valid.zip"),
@@ -230,6 +267,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             # https://exrcsdrive.kaust.edu.sa/index.php/s/x2okf31MzBZRpl4 # user for SoccerNetv2 Action Spotting JSON format
                                             user="x2okf31MzBZRpl4",
                                             password=password,
+                                            s3_bucket=self.s3_bucket,
                                             verbose=verbose)
                 if "test" in split:
                     res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, version, "test.zip"),
@@ -238,6 +276,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             # https://exrcsdrive.kaust.edu.sa/index.php/s/x2okf31MzBZRpl4 # user for SoccerNetv2 Action Spotting JSON format
                                             user="x2okf31MzBZRpl4",
                                             password=password,
+                                            s3_bucket=self.s3_bucket,
                                             verbose=verbose)
                 if "challenge" in split:
                     res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, version, "challenge.zip"),
@@ -246,6 +285,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             # https://exrcsdrive.kaust.edu.sa/index.php/s/x2okf31MzBZRpl4 # user for SoccerNetv2 Action Spotting JSON format
                                             user="x2okf31MzBZRpl4",
                                             password=password,
+                                            s3_bucket=self.s3_bucket,
                                             verbose=verbose)
             if version == "baidu_soccer_embeddings":
                 if "train" in split:
@@ -255,6 +295,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             # https://exrcsdrive.kaust.edu.sa/index.php/s/tqXXg1LdpM1YRUW # user for SoccerNetv2 Action Spotting JSON format
                                             user="tqXXg1LdpM1YRUW",
                                             password=password,
+                                            s3_bucket=self.s3_bucket,
                                             verbose=verbose)
                 if "valid" in split:
                     res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, version, "valid.zip"),
@@ -263,6 +304,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             # https://exrcsdrive.kaust.edu.sa/index.php/s/tqXXg1LdpM1YRUW # user for SoccerNetv2 Action Spotting JSON format
                                             user="tqXXg1LdpM1YRUW",
                                             password=password,
+                                            s3_bucket=self.s3_bucket,
                                             verbose=verbose)
                 if "test" in split:
                     res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, version, "test.zip"),
@@ -271,6 +313,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             # https://exrcsdrive.kaust.edu.sa/index.php/s/tqXXg1LdpM1YRUW # user for SoccerNetv2 Action Spotting JSON format
                                             user="tqXXg1LdpM1YRUW",
                                             password=password,
+                                            s3_bucket=self.s3_bucket,
                                             verbose=verbose)
                 if "challenge" in split:
                     res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, version, "challenge.zip"),
@@ -279,6 +322,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             # https://exrcsdrive.kaust.edu.sa/index.php/s/tqXXg1LdpM1YRUW # user for SoccerNetv2 Action Spotting JSON format
                                             user="tqXXg1LdpM1YRUW",
                                             password=password,
+                                            s3_bucket=self.s3_bucket,
                                             verbose=verbose)
 
             if version == "ResNET_PCA512" or version == None:
@@ -289,6 +333,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             # https://exrcsdrive.kaust.edu.sa/index.php/s/bpQnDs15nPDQUHo # user for SoccerNetv2 Action Spotting JSON format
                                             user="bpQnDs15nPDQUHo",
                                             password=password,
+                                            s3_bucket=self.s3_bucket,
                                             verbose=verbose)
                 if "valid" in split:
                     res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, version, "valid.zip"),
@@ -297,6 +342,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             # https://exrcsdrive.kaust.edu.sa/index.php/s/bpQnDs15nPDQUHo # user for SoccerNetv2 Action Spotting JSON format
                                             user="bpQnDs15nPDQUHo",
                                             password=password,
+                                            s3_bucket=self.s3_bucket,
                                             verbose=verbose)
                 if "test" in split:
                     res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, version, "test.zip"),
@@ -305,6 +351,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             # https://exrcsdrive.kaust.edu.sa/index.php/s/bpQnDs15nPDQUHo # user for SoccerNetv2 Action Spotting JSON format
                                             user="bpQnDs15nPDQUHo",
                                             password=password,
+                                            s3_bucket=self.s3_bucket,
                                             verbose=verbose)
                 if "challenge" in split:
                     res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, version, "challenge.zip"),
@@ -313,6 +360,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             # https://exrcsdrive.kaust.edu.sa/index.php/s/bpQnDs15nPDQUHo # user for SoccerNetv2 Action Spotting JSON format
                                             user="bpQnDs15nPDQUHo",
                                             password=password,
+                                            s3_bucket=self.s3_bucket,
                                             verbose=verbose)
             if "test_labels" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "test.json"),
@@ -321,6 +369,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/index.php/s/vDntX64kYkeyqN1 # user for SoccerNetv2 Action Spotting JSON format GT
                                         user="vDntX64kYkeyqN1",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
 
 
@@ -331,6 +380,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/index.php/s/vDntX64kYkeyqN1 # user for SoccerNetv2 Action Spotting JSON format GT
                                         user="vDntX64kYkeyqN1",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
 
         # 2025
@@ -382,6 +432,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                                 ' ', '%20').replace('\\', '/'),
                                             user="j2Nm0gQpPmmbrMg",
                                             password=password,
+                                            s3_bucket=self.s3_bucket,
                                             verbose=verbose)
                 if "valid" in split:
                     res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "valid.zip"),
@@ -389,6 +440,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                                 ' ', '%20').replace('\\', '/'),
                                             user="j2Nm0gQpPmmbrMg",
                                             password=password,
+                                            s3_bucket=self.s3_bucket,
                                             verbose=verbose)
                 if "test" in split:
                     res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "test.zip"),
@@ -396,6 +448,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                                 ' ', '%20').replace('\\', '/'),
                                             user="j2Nm0gQpPmmbrMg",
                                             password=password,
+                                            s3_bucket=self.s3_bucket,
                                             verbose=verbose)
                 if "challenge" in split:
                     res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "challenge.zip"),
@@ -403,6 +456,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                                 ' ', '%20').replace('\\', '/'),
                                             user="j2Nm0gQpPmmbrMg",
                                             password=password,
+                                            s3_bucket=self.s3_bucket,
                                             verbose=verbose)
             elif version == "720p":
                 if "train" in split:
@@ -411,6 +465,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                                 ' ', '%20').replace('\\', '/'),
                                             user="j2Nm0gQpPmmbrMg",
                                             password=password,
+                                            s3_bucket=self.s3_bucket,
                                             verbose=verbose)
                 if "valid" in split:
                     res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "valid_720p.zip"),
@@ -418,6 +473,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                                 ' ', '%20').replace('\\', '/'),
                                             user="j2Nm0gQpPmmbrMg",
                                             password=password,
+                                            s3_bucket=self.s3_bucket,
                                             verbose=verbose)
                 if "test" in split:
                     res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "test_720p.zip"),
@@ -425,6 +481,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                                 ' ', '%20').replace('\\', '/'),
                                             user="j2Nm0gQpPmmbrMg",
                                             password=password,
+                                            s3_bucket=self.s3_bucket,
                                             verbose=verbose)
                 if "challenge" in split:
                     res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "challenge_720p.zip"),
@@ -432,6 +489,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                                 ' ', '%20').replace('\\', '/'),
                                             user="j2Nm0gQpPmmbrMg",
                                             password=password,
+                                            s3_bucket=self.s3_bucket,
                                             verbose=verbose)
             if "test_labels" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "test_labels.json"),
@@ -439,6 +497,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             ' ', '%20').replace('\\', '/'),
                                         user="NpdmRKxOGnaQKEv",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "challenge_labels" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "challenge_labels.json"),
@@ -446,6 +505,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             ' ', '%20').replace('\\', '/'),
                                         user="NpdmRKxOGnaQKEv",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
         elif task == "gamestate-2024":
             if "train" in split:
@@ -455,6 +515,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/index.php/s/iOJmJH6rYnx7mOS # user for calibration splits
                                         user="iOJmJH6rYnx7mOS",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "valid" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "valid.zip"),
@@ -463,6 +524,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/index.php/s/iOJmJH6rYnx7mOS # user for calibration splits
                                         user="iOJmJH6rYnx7mOS",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "test" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "test.zip"),
@@ -471,6 +533,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/index.php/s/iOJmJH6rYnx7mOS # user for calibration splits
                                         user="iOJmJH6rYnx7mOS",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "challenge" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "challenge.zip"),
@@ -479,6 +542,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/index.php/s/iOJmJH6rYnx7mOS # user for calibration splits
                                         user="iOJmJH6rYnx7mOS",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "test_labels" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "test_labels.zip"),
@@ -487,6 +551,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/index.php/s/94cEKBCjtwplXc1 # user for calibration splits GT
                                         user="94cEKBCjtwplXc1",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "challenge_labels" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "challenge_labels.zip"),
@@ -495,6 +560,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/index.php/s/94cEKBCjtwplXc1 # user for calibration splits GT
                                         user="94cEKBCjtwplXc1",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
         elif task == "caption-2024":
             if "train" in split:
@@ -540,6 +606,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/index.php/s/ThC443j7rM57UPp # user for caption splits GT
                                         user="ThC443j7rM57UPp",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
 
             if "challenge_labels" in split:
@@ -549,6 +616,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/index.php/s/ThC443j7rM57UPp # user for caption splits GT
                                         user="ThC443j7rM57UPp",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
         elif task == "spotting-ball-2024":
             if "train" in split:
@@ -558,6 +626,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/index.php/s/5yhG5AtySHFNU4T # user for fine grained spotting splits
                                         user="5yhG5AtySHFNU4T",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "valid" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "valid.zip"),
@@ -566,6 +635,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/index.php/s/5yhG5AtySHFNU4T # user for fine grained spotting splits
                                         user="5yhG5AtySHFNU4T",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "test" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "test.zip"),
@@ -574,6 +644,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/index.php/s/5yhG5AtySHFNU4T # user for fine grained spotting splits
                                         user="5yhG5AtySHFNU4T",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "challenge" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "challenge.zip"),
@@ -582,6 +653,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/index.php/s/5yhG5AtySHFNU4T # user for fine grained spotting splits
                                         user="5yhG5AtySHFNU4T",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "test_labels" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "test-private.zip"),
@@ -590,6 +662,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/index.php/s/QfgR2L12SQB0WFz # user for fine grained spotting splits GT
                                         user="QfgR2L12SQB0WFz",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
                 if res == 1:  # HTTPError
                     print("This function should download test_labels.zip for fine grained spotting - but test_labels.zip was not uploaded on the server yet! - or check the password")
@@ -601,6 +674,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/index.php/s/QfgR2L12SQB0WFz # user for fine grained spotting splits GT
                                         user="QfgR2L12SQB0WFz",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
 
         # 2023
@@ -612,6 +686,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/UxCNUvxClQ8Hw2R # user for calibration splits
                                         user="DxdZ39FT9GqCkEe",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "valid" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "valid.zip"),
@@ -620,6 +695,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/UxCNUvxClQ8Hw2R # user for calibration splits
                                         user="DxdZ39FT9GqCkEe",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "test" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "test.zip"),
@@ -628,6 +704,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/UxCNUvxClQ8Hw2R # user for calibration splits
                                         user="DxdZ39FT9GqCkEe",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "challenge" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "challenge.zip"),
@@ -636,6 +713,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/DxdZ39FT9GqCkEe # user for calibration splits
                                         user="DxdZ39FT9GqCkEe",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "test_labels" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "test_secret.zip"),
@@ -644,6 +722,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/D4xoTmkC7SEJGZp # user for calibration splits GT
                                         user="D4xoTmkC7SEJGZp",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "challenge_labels" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "challenge_secret.zip"),
@@ -652,6 +731,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/D4xoTmkC7SEJGZp # user for calibration splits GT
                                         user="D4xoTmkC7SEJGZp",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
         elif task == "reid-2023":
             if "train" in split:
@@ -661,6 +741,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/UNYXsOv9RJFU3ax # user for reid splits
                                         user="UNYXsOv9RJFU3ax",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "valid" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "valid.zip"),
@@ -669,6 +750,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/UNYXsOv9RJFU3ax # user for reid splits
                                         user="UNYXsOv9RJFU3ax",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "test" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "test.zip"),
@@ -677,6 +759,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/UNYXsOv9RJFU3ax # user for reid splits
                                         user="UNYXsOv9RJFU3ax",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "challenge" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "challenge.zip"),
@@ -685,6 +768,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/UNYXsOv9RJFU3ax # user for reid splits
                                         user="UNYXsOv9RJFU3ax",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "test_labels" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "test_bbox_info.json"),
@@ -693,6 +777,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/GXmA6cNHEJS0MAj # user for reid splits GT
                                         user="GXmA6cNHEJS0MAj",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
                 if res == 1:  # HTTPError
                     print("This function should download test_labels.zip for reid - but test_labels.zip was not uploaded on the server yet! - or check the password")
@@ -704,6 +789,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/GXmA6cNHEJS0MAj # user for reid splits GT
                                         user="GXmA6cNHEJS0MAj",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
         elif task == "spotting-ball-2023":
             if "train" in split:
@@ -713,6 +799,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/A1ncJfjV31lPSTa # user for fine grained spotting splits
                                         user="A1ncJfjV31lPSTa",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "valid" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "valid.zip"),
@@ -721,6 +808,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/A1ncJfjV31lPSTa # user for fine grained spotting splits
                                         user="A1ncJfjV31lPSTa",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "test" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "test.zip"),
@@ -729,6 +817,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/A1ncJfjV31lPSTa # user for fine grained spotting splits
                                         user="A1ncJfjV31lPSTa",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "challenge" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "challenge.zip"),
@@ -737,6 +826,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/A1ncJfjV31lPSTa # user for fine grained spotting splits
                                         user="A1ncJfjV31lPSTa",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "test_labels" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "test-private.zip"),
@@ -745,6 +835,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/s3Rub1T7C81b90o # user for fine grained spotting splits GT
                                         user="s3Rub1T7C81b90o",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
                 if res == 1:  # HTTPError
                     print("This function should download test_labels.zip for fine grained spotting - but test_labels.zip was not uploaded on the server yet! - or check the password")
@@ -756,6 +847,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/s3Rub1T7C81b90o # user for fine grained spotting splits GT
                                         user="s3Rub1T7C81b90o",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
         elif task == "tracking-2023":
             if "train" in split:
@@ -765,6 +857,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/OP7fl7h25NqGfcN # user for tracking splits
                                         user="OP7fl7h25NqGfcN",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
                 if res == 1:  # HTTPError
                     print(
@@ -777,6 +870,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/OP7fl7h25NqGfcN # user for tracking splits
                                         user="OP7fl7h25NqGfcN",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
                 if res == 1:  # HTTPError
                     print(
@@ -789,6 +883,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/OP7fl7h25NqGfcN # user for tracking splits
                                         user="OP7fl7h25NqGfcN",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
                 if res == 1:  # HTTPError
                     print(
@@ -801,6 +896,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/PvYoZG1INJEp7fk # user for tracking splits GT
                                         user="PvYoZG1INJEp7fk",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
                 if res == 1:  # HTTPError
                     print("This function should download test_labels.zip for tracking - but test_labels.zip was not uploaded on the server yet! - or check the password")
@@ -812,6 +908,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/PvYoZG1INJEp7fk # user for tracking splits GT
                                         user="PvYoZG1INJEp7fk",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
                 if res == 1:  # HTTPError
                     print("This function should download challenge_labels.zip for tracking - but challenge_labels.zip was not uploaded on the server yet! - or check the password")
@@ -823,6 +920,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/ejGBsiDr47cTXnf # user for jersey splits
                                         user="ejGBsiDr47cTXnf",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
                 if res == 1:  # HTTPError
                     print(
@@ -835,6 +933,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/ejGBsiDr47cTXnf # user for jersey splits
                                         user="ejGBsiDr47cTXnf",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
                 if res == 1:  # HTTPError
                     print(
@@ -847,6 +946,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/ejGBsiDr47cTXnf # user for jersey splits
                                         user="ejGBsiDr47cTXnf",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
                 if res == 1:  # HTTPError
                     print(
@@ -859,6 +959,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/KQ8VcRcKTSbYx1S # user for jersey splits GT
                                         user="KQ8VcRcKTSbYx1S",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
                 if res == 1:  # HTTPError
                     print("This function should download test_labels.zip for jersey - but test_labels.zip was not uploaded on the server yet! - or check the password")
@@ -870,6 +971,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/KQ8VcRcKTSbYx1S # user for jersey splits GT
                                         user="KQ8VcRcKTSbYx1S",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
                 if res == 1:  # HTTPError
                     print("This function should download challenge_gt.json for jersey - but challenge_labels.zip was not uploaded on the server yet! - or check the password")
@@ -913,6 +1015,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/8N4bUNJwlEh2rWL # user for spotting splits GT
                                         user="8N4bUNJwlEh2rWL",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
 
             if "challenge_labels" in split:
@@ -922,6 +1025,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/8N4bUNJwlEh2rWL # user for spotting splits GT
                                         user="8N4bUNJwlEh2rWL",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
         elif task == "caption-2023":
             if "train" in split:
@@ -967,6 +1071,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/8eaHb2gyDsEqTlI # user for caption splits GT
                                         user="8eaHb2gyDsEqTlI",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
 
             if "challenge_labels" in split:
@@ -976,6 +1081,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/8eaHb2gyDsEqTlI # user for caption splits GT
                                         user="8eaHb2gyDsEqTlI",
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
 
 
@@ -986,36 +1092,42 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         path_owncloud=os.path.join(self.OwnCloudServer, "train.zip").replace(' ', '%20').replace('\\', '/'),
                                         user="UxCNUvxClQ8Hw2R",  # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/UxCNUvxClQ8Hw2R # user for calibration splits
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "valid" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "valid.zip"),
                                         path_owncloud=os.path.join(self.OwnCloudServer, "valid.zip").replace(' ', '%20').replace('\\', '/'),
                                         user="UxCNUvxClQ8Hw2R",  # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/UxCNUvxClQ8Hw2R # user for calibration splits
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "test" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "test.zip"),
                                         path_owncloud=os.path.join(self.OwnCloudServer, "test.zip").replace(' ', '%20').replace('\\', '/'),
                                         user="UxCNUvxClQ8Hw2R",  # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/UxCNUvxClQ8Hw2R # user for calibration splits
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "challenge" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "challenge.zip"),
                                         path_owncloud=os.path.join(self.OwnCloudServer, "challenge.zip").replace(' ', '%20').replace('\\', '/'),
                                         user="UxCNUvxClQ8Hw2R",  # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/UxCNUvxClQ8Hw2R # user for calibration splits
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "test_labels" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "calibration_test_json.zip"),
                                         path_owncloud=os.path.join(self.OwnCloudServer, "calibration_test_json.zip").replace(' ', '%20').replace('\\', '/'),
                                         user="n8J8hetGNT43KLX",  # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/n8J8hetGNT43KLX # user for calibration splits GT
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             if "challenge_labels" in split:
                 res = self.downloadFile(path_local=os.path.join(self.LocalDirectory, task, "calibration_challenge_json.zip"),
                                         path_owncloud=os.path.join(self.OwnCloudServer, "calibration_challenge_json.zip").replace(' ', '%20').replace('\\', '/'),
                                         user="n8J8hetGNT43KLX",  # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/n8J8hetGNT43KLX # user for calibration splits GT
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
 
         # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/Ffr8fsJcljh2Ds5 # user for reid splits
@@ -1026,6 +1138,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         path_owncloud=os.path.join(self.OwnCloudServer, "train.zip").replace(' ', '%20').replace('\\', '/'),
                                         user="Ffr8fsJcljh2Ds5",  # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/Ffr8fsJcljh2Ds5 # user for reid splits
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
                 if res == 1: #HTTPError
                     print("This function should download train.zip for reid - but train.zip was not uploaded on the server yet!")
@@ -1035,6 +1148,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         path_owncloud=os.path.join(self.OwnCloudServer, "valid.zip").replace(' ', '%20').replace('\\', '/'),
                                         user="Ffr8fsJcljh2Ds5",  # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/Ffr8fsJcljh2Ds5 # user for reid splits
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
                 if res == 1: #HTTPError
                     print("This function should download valid.zip for reid - but valid.zip was not uploaded on the server yet!")
@@ -1044,6 +1158,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         path_owncloud=os.path.join(self.OwnCloudServer, "test.zip").replace(' ', '%20').replace('\\', '/'),
                                         user="Ffr8fsJcljh2Ds5",  # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/Ffr8fsJcljh2Ds5 # user for reid splits
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
                 if res == 1: #HTTPError
                     print("This function should download test.zip for reid - but test.zip was not uploaded on the server yet!")
@@ -1053,6 +1168,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         path_owncloud=os.path.join(self.OwnCloudServer, "challenge.zip").replace(' ', '%20').replace('\\', '/'),
                                         user="Ffr8fsJcljh2Ds5",  # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/Ffr8fsJcljh2Ds5 # user for reid splits
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
                 if res == 1: #HTTPError
                     print("This function should download challenge.zip for reid - but challenge.zip was not uploaded on the server yet!")
@@ -1062,6 +1178,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         path_owncloud=os.path.join(self.OwnCloudServer, "test_bbox_info.json").replace(' ', '%20').replace('\\', '/'),
                                         user="H16Jx8AD39RzhFU",  # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/Ffr8fsJcljh2Ds5 # user for reid splits
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
                 if res == 1: #HTTPError
                     print("This function should download test_labels.zip for reid - but test_labels.zip was not uploaded on the server yet! - or check the password")
@@ -1071,6 +1188,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         path_owncloud=os.path.join(self.OwnCloudServer, "challenge_bbox_info.json").replace(' ', '%20').replace('\\', '/'),
                                         user="H16Jx8AD39RzhFU",  # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/Ffr8fsJcljh2Ds5 # user for reid splits
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
                 if res == 1: #HTTPError
                     print("This function should download challenge_labels.zip for reid - but challenge_labels.zip was not uploaded on the server yet! - or check the password")
@@ -1083,6 +1201,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         path_owncloud=os.path.join(self.OwnCloudServer, "train.zip").replace(' ', '%20').replace('\\', '/'),
                                         user="o9tzUs2GcuEwcnr",  # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/o9tzUs2GcuEwcnr # user for tracking splits
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
                 if res == 1: #HTTPError
                     print("This function should download train.zip for tracking - but train.zip was not uploaded on the server yet!")
@@ -1092,6 +1211,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         path_owncloud=os.path.join(self.OwnCloudServer, "test.zip").replace(' ', '%20').replace('\\', '/'),
                                         user="o9tzUs2GcuEwcnr",  # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/o9tzUs2GcuEwcnr # user for tracking splits
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
                 if res == 1: #HTTPError
                     print("This function should download test.zip for tracking - but test.zip was not uploaded on the server yet!")
@@ -1101,6 +1221,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         path_owncloud=os.path.join(self.OwnCloudServer, "challenge.zip").replace(' ', '%20').replace('\\', '/'),
                                         user="o9tzUs2GcuEwcnr",  # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/o9tzUs2GcuEwcnr # user for tracking splits
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
                 if res == 1: #HTTPError
                     print("This function should download challenge.zip for tracking - but challenge.zip was not uploaded on the server yet!")
@@ -1110,6 +1231,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         path_owncloud=os.path.join(self.OwnCloudServer, "test_labels.zip").replace(' ', '%20').replace('\\', '/'),
                                         user="qWNjAzjEI6hezNf",  # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/qWNjAzjEI6hezNf # user for tracking splits GT
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
                 if res == 1: #HTTPError
                     print("This function should download test_labels.zip for tracking - but test_labels.zip was not uploaded on the server yet! - or check the password")
@@ -1119,6 +1241,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         path_owncloud=os.path.join(self.OwnCloudServer, "challenge_labels.zip").replace(' ', '%20').replace('\\', '/'),
                                         user="qWNjAzjEI6hezNf",  # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/qWNjAzjEI6hezNf # user for tracking splits GT
                                         password=password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
                 if res == 1: #HTTPError
                     print("This function should download challenge_labels.zip for tracking - but challenge_labels.zip was not uploaded on the server yet! - or check the password")
@@ -1145,7 +1268,8 @@ class SoccerNetDownloader(OwnCloudDownloader):
         res = self.downloadFile(path_local=FileLocal,
                                 path_owncloud=FileURL,
                                 user=user,  # user for video HQ
-                                password=self.password)
+                                password=self.password,
+                                s3_bucket=self.s3_bucket)
 
 
     def downloadVideo(self, game, file):
@@ -1161,7 +1285,8 @@ class SoccerNetDownloader(OwnCloudDownloader):
         res = self.downloadFile(path_local=FileLocal,
                                 path_owncloud=FileURL,
                                 user=user,  # user for video
-                                password=self.password)
+                                password=self.password,
+                                s3_bucket=self.s3_bucket)
 
     def downloadGameIndex(self, index, files=["1.mkv", "2.mkv", "Labels.json"], verbose=True):
         return self.downloadGame(getListGames("all")[index], files=files, verbose=verbose)
@@ -1183,6 +1308,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         path_owncloud=os.path.join(self.OwnCloudServer, "video_224p", game, file).replace(' ', '%20').replace('\\', '/'),
                                         user="MKmZigARdGSoaTT",  # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/MKmZigARdGSoaTT # user for video 224p
                                         password=self.password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
 
             # 720p Videos
@@ -1191,6 +1317,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         path_owncloud=os.path.join(self.OwnCloudServer, "video_720p", game, file).replace(' ', '%20').replace('\\', '/'),
                                         user="xNGfp1W3wPeVOmQ",  # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/xNGfp1W3wPeVOmQ # user for video 720p
                                         password=self.password,
+                                        s3_bucket=self.s3_bucket,
                                         verbose=verbose)
             # print(spl)
             if spl == "challenge":  # specific buckets for the challenge set
@@ -1201,6 +1328,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             path_owncloud=FileURL,
                                             user="trXNXsW9W04onBh",  # user for video LQ
                                             password=self.password,
+                                            s3_bucket=self.s3_bucket,
                                             verbose=verbose)
 
                 # HQ Videos
@@ -1209,6 +1337,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             path_owncloud=FileURL,
                                             user="gJ8gja7V8SLxYBh",  # user for video HQ
                                             password=self.password,
+                                            s3_bucket=self.s3_bucket,
                                             verbose=verbose)
 
                 # V3
@@ -1217,6 +1346,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             path_owncloud=FileURL,
                                             user="NqU4604el8hssGx",  # shared folder for V3
                                             password=self.password,
+                                            s3_bucket=self.s3_bucket,
                                             verbose=verbose)
 
                 elif file in ["Frames-v3.zip"]:
@@ -1224,6 +1354,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             path_owncloud=FileURL,
                                             user="okteXlk6jmDXNJc",  # shared folder for V3
                                             password="SoccerNet_Reviewers_SDATA",
+                                            s3_bucket=self.s3_bucket,
                                             verbose=verbose)
 
                 # Labels
@@ -1234,6 +1365,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             path_owncloud=FileURL,
                                             user="WUOSnPSYRC1RY13",  # user for Labels
                                             password=self.password,
+                                            s3_bucket=self.s3_bucket,
                                             verbose=verbose)
 
                 # Features
@@ -1242,6 +1374,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             path_owncloud=FileURL,
                                             user="d4nu5rJ6IilF9B0",  # user for Features
                                             password="SoccerNet",
+                                            s3_bucket=self.s3_bucket,
                                             verbose=verbose)
 
 
@@ -1252,6 +1385,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             path_owncloud=FileURL,
                                             user="6XYClm33IyBkTgl",  # user for video LQ
                                             password=self.password,
+                                            s3_bucket=self.s3_bucket,
                                             verbose=verbose)
 
                 # HQ Videos
@@ -1260,6 +1394,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             path_owncloud=FileURL,
                                             user="B72R7dTu1tZtIst",  # user for video HQ
                                             password=self.password,
+                                            s3_bucket=self.s3_bucket,
                                             verbose=verbose)
 
                 # V3
@@ -1268,6 +1403,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             path_owncloud=FileURL,
                                             user="okteXlk6jmDXNJc",  # shared folder for V3
                                             password="SoccerNet_Reviewers_SDATA",
+                                            s3_bucket=self.s3_bucket,
                                             verbose=verbose)
 
                 # Labels
@@ -1277,6 +1413,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             path_owncloud=FileURL,
                                             user="ZDeEfBzCzseRCLA",  # user for Labels
                                             password="SoccerNet",
+                                            s3_bucket=self.s3_bucket,
                                             verbose=verbose)
 
                 # features
@@ -1285,6 +1422,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             path_owncloud=FileURL,
                                             user="9eRjic29XTk0gS9",  # user for Features
                                             password="SoccerNet",
+                                            s3_bucket=self.s3_bucket,
                                             verbose=verbose)
 
 
@@ -1311,6 +1449,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                     # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/Jk85T1yV7DKMcCI # user for raw videos
                                     user="Jk85T1yV7DKMcCI",
                                     password=self.password,
+                                    s3_bucket=self.s3_bucket,
                                     verbose=verbose)
 
 
@@ -1326,9 +1465,13 @@ if __name__ == "__main__":
                         type=str, help='Path to the SoccerNet-V2 dataset folder')
     parser.add_argument('--password',   required=False,
                         type=str, help='Path to the list of games to treat')
+    parser.add_argument('--bucket',   required=False, default=None,
+                        type=str, help='S3 bucket to upload the data')
     args = parser.parse_args()
 
     mySoccerNetDownloader = SoccerNetDownloader(args.SoccerNet_path)
     mySoccerNetDownloader.password = args.password
+    mySoccerNetDownloader.s3_bucket = args.bucket
     mySoccerNetDownloader.downloadGameIndex(index=549, files=[
                                        "1_HQ.mkv", "2_HQ.mkv", "video.ini", "Labels.json"])
+    mySoccerNetDownloader.downloadGames(files=["1_224p.mkv", "2_224p.mkv"], split=["challenge"])
