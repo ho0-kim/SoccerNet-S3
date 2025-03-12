@@ -31,17 +31,15 @@ class S3Progress(object):
     def __init__(self, total_size, filename):
         self._total_size = float(total_size)
         self.filename = filename
-        self._seen_so_far = 0
         self._lock = threading.Lock()
+
+        self.pbar = tqdm(total=total_size, unit='byte', unit_scale=True)
+        self.pbar.set_description(f"Uploading {self.filename}...")
+        self.pbar.refresh()  # to show immediately the update
 
     def __call__(self, bytes_amount):
         with self._lock:
-            self._seen_so_far += bytes_amount
-            percentage = (self._seen_so_far / self._total_size) * 100
-            sys.stdout.write(
-                f"\r{self.filename} Uploaded {self._seen_so_far:.2f} / {self._total_size:.2f} bytes ({percentage:.2f}%)"
-            )
-            sys.stdout.flush()
+            self.pbar.update(bytes_amount)
 
 import uuid
 from google_measurement_protocol import event, report
