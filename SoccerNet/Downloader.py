@@ -1,12 +1,12 @@
 
 import urllib.request
-import os
+import os, glob
 import sys
 import threading
 from tqdm import tqdm
 import json
 import random
-from SoccerNet.utils import getListGames
+from SoccerNet.utils import getListGames, extractFrames
 from huggingface_hub import snapshot_download
 from pathlib import Path
 from getpass import getpass
@@ -51,7 +51,7 @@ class OwnCloudDownloader():
 
         self.client_id = uuid.uuid4()
 
-    def downloadFile(self, path_local, path_owncloud, user=None, password=None, verbose=True, s3_bucket=None):
+    def downloadFile(self, path_local, path_owncloud, user=None, password=None, verbose=True, s3_bucket=None, xtr_conf=None):
         # return 0: successfully downloaded
         # return 1: HTTPError
         # return 2: unsupported error
@@ -86,10 +86,27 @@ class OwnCloudDownloader():
                 print("Stream to AWS S3 Bucket")
                 try:
                     s3_client = boto3.client('s3')
-                    with urllib.request.urlopen(path_owncloud) as response:
-                        total_size = int(response.info().get('Content-Length', 0))  # Get content size from headers
-                        s3_client.upload_fileobj(response, s3_bucket, path_local,
-                                                 Callback=S3Progress(total_size, path_local))
+                    if xtr_conf: # Extract frames & Upload to S3 Bucket
+                        os.makedirs(os.path.dirname(path_local), exist_ok=True)
+                        urllib.request.urlretrieve(
+                            path_owncloud, path_local, MyProgressBar(path_local))
+                        if os.path.splitext(path_local)[1] in ['.mp4', '.avi', '.mkv']:
+                            out_folder = extractFrames(path_local, stride=xtr_conf['stride'], target_dim=(xtr_conf['width'], xtr_conf['height']))
+                            os.remove(path_local)
+                            for frame in glob.glob(f"{out_folder}/*.jpg"):
+                                s3_client.upload_file(frame, s3_bucket, frame,
+                                                    Callback=S3Progress(os.path.getsize(frame), frame))
+                                os.remove(frame)
+                            os.rmdir(out_folder)
+                        else:
+                            s3_client.upload_file(path_local, s3_bucket, path_local,
+                                                Callback=S3Progress(os.path.getsize(path_local), path_local))
+                            os.remove(path_local)
+                    else:   # Directly upload to S3 Bucket
+                        with urllib.request.urlopen(path_owncloud) as response:
+                            total_size = int(response.info().get('Content-Length', 0))  # Get content size from headers
+                            s3_client.upload_fileobj(response, s3_bucket, path_local,
+                                                    Callback=S3Progress(total_size, path_local))
                 except urllib.error.HTTPError as identifier:
                     print(identifier)
                     return 1
@@ -98,7 +115,10 @@ class OwnCloudDownloader():
                     os.makedirs(os.path.dirname(path_local), exist_ok=True)
                     urllib.request.urlretrieve(
                         path_owncloud, path_local, MyProgressBar(path_local))
-
+                    if xtr_conf:
+                        if os.path.splitext(path_local)[1] in ['.mp4', '.avi', '.mkv']:
+                            out_folder = extractFrames(path_local, stride=xtr_conf['stride'], target_dim=(xtr_conf['width'], xtr_conf['height']))
+                            os.remove(path_local)
                 except urllib.error.HTTPError as identifier:
                     print(identifier)
                     return 1
@@ -175,6 +195,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
             LocalDirectory, OwnCloudServer)
         self.password = None
         self.s3_bucket = None
+        self.xtr_conf = None
 
     def downloadDataTask(self, task, split=["train","valid","test","challenge"], verbose=True, password="SoccerNet", version=None, source="HuggingFace"): # Generic password for public data
 
@@ -1307,6 +1328,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         user="MKmZigARdGSoaTT",  # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/MKmZigARdGSoaTT # user for video 224p
                                         password=self.password,
                                         s3_bucket=self.s3_bucket,
+                                        xtr_conf=self.xtr_conf,
                                         verbose=verbose)
 
             # 720p Videos
@@ -1316,6 +1338,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                         user="xNGfp1W3wPeVOmQ",  # https://exrcsdrive.kaust.edu.sa/exrcsdrive/index.php/s/xNGfp1W3wPeVOmQ # user for video 720p
                                         password=self.password,
                                         s3_bucket=self.s3_bucket,
+                                        xtr_conf=self.xtr_conf,
                                         verbose=verbose)
             # print(spl)
             if spl == "challenge":  # specific buckets for the challenge set
@@ -1327,6 +1350,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             user="trXNXsW9W04onBh",  # user for video LQ
                                             password=self.password,
                                             s3_bucket=self.s3_bucket,
+                                            xtr_conf=self.xtr_conf,
                                             verbose=verbose)
 
                 # HQ Videos
@@ -1336,6 +1360,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             user="gJ8gja7V8SLxYBh",  # user for video HQ
                                             password=self.password,
                                             s3_bucket=self.s3_bucket,
+                                            xtr_conf=self.xtr_conf,
                                             verbose=verbose)
 
                 # V3
@@ -1384,6 +1409,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             user="6XYClm33IyBkTgl",  # user for video LQ
                                             password=self.password,
                                             s3_bucket=self.s3_bucket,
+                                            xtr_conf=self.xtr_conf,
                                             verbose=verbose)
 
                 # HQ Videos
@@ -1393,6 +1419,7 @@ class SoccerNetDownloader(OwnCloudDownloader):
                                             user="B72R7dTu1tZtIst",  # user for video HQ
                                             password=self.password,
                                             s3_bucket=self.s3_bucket,
+                                            xtr_conf=self.xtr_conf,
                                             verbose=verbose)
 
                 # V3
@@ -1467,9 +1494,12 @@ if __name__ == "__main__":
                         type=str, help='S3 bucket to upload the data')
     args = parser.parse_args()
 
+    # extract_config = {'stride': 2, 'width': 796, 'height': 448}
+
     mySoccerNetDownloader = SoccerNetDownloader(args.SoccerNet_path)
     mySoccerNetDownloader.password = args.password
     mySoccerNetDownloader.s3_bucket = args.bucket
+    # mySoccerNetDownloader.xtr_conf = extract_config
     mySoccerNetDownloader.downloadGameIndex(index=549, files=[
                                        "1_HQ.mkv", "2_HQ.mkv", "video.ini", "Labels.json"])
     mySoccerNetDownloader.downloadGames(files=["1_224p.mkv", "2_224p.mkv"], split=["challenge"])

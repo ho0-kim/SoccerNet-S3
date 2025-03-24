@@ -3,3 +3,4 @@ scikit-video
 matplotlib
 google-measurement-protocol
 pycocoevalcap
+opencv-python

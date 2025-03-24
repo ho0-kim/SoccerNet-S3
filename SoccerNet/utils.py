@@ -2,6 +2,7 @@
 from pathlib import Path
 import json
 import os
+import cv2
 
 def getListGames(split="v1", task="spotting", dataset="SoccerNet"):
    
@@ -140,6 +141,42 @@ def getListGames(split="v1", task="spotting", dataset="SoccerNet"):
 
     return listgames
 
+def extractFrames(video_path, stride=2, target_dim=(796, 448)):
+    """
+    video_path: str - path to the video file
+    stride: int - number of frames to skip
+    target_dim: tuple - target dimension of the frames (width, height)
+    """
+    video_file = os.path.basename(video_path)
+    half = "half1" if video_file[0] == "1" else "half2"
+    
+    paths = video_path.split("/")
+    game = paths[-2]
+    season = paths[-3]
+    league = paths[-4]
+    root = paths[:-4]
+
+    out_folder = os.path.join(f"{root}{target_dim[1]}", league, season, game, half)
+    if not os.path.exists(out_folder):
+        os.makedirs(out_folder)
+
+    cap = cv2.VideoCapture(video_path)
+    num_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    
+    count = 0
+    while cap.isOpened():
+        ret, frame = cap.read()
+
+        if not ret: break
+
+        if count % stride == 0:
+            cv2.imwrite(os.path.join(out_folder, f"frame{count}.jpg"), frame)
+            progress = f"Extracting {video_file} {count}/{num_frames} {count / num_frames * 100:.2f}%"
+            print(progress, end="\r", flush=True)  # Overwrite the same line
+        count += 1    
+    print()  # Print a newline after the loop finishes
+    cap.release()
+    return out_folder
 
 if __name__ == "__main__":
     print(len(getListGames(["v1"],task="camera-changes")))
