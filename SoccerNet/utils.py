@@ -154,7 +154,7 @@ def extractFrames(video_path, stride=2, target_dim=(796, 448)):
     game = paths[-2]
     season = paths[-3]
     league = paths[-4]
-    root = paths[:-4]
+    root = os.path.join(paths[:-4])
 
     out_folder = os.path.join(f"{root}{target_dim[1]}", league, season, game, half)
     if not os.path.exists(out_folder):
