@@ -93,9 +93,8 @@ class OwnCloudDownloader():
                         if os.path.splitext(path_local)[1] in ['.mp4', '.avi', '.mkv']:
                             out_folder = extractFrames(path_local, stride=xtr_conf['stride'], target_dim=(xtr_conf['width'], xtr_conf['height']))
                             os.remove(path_local)
-                            for frame in glob.glob(f"{out_folder}/*.jpg"):
-                                s3_client.upload_file(frame, s3_bucket, frame,
-                                                    Callback=S3Progress(os.path.getsize(frame), frame))
+                            for frame in tqdm(glob.glob(f"{out_folder}/*.jpg"), desc="Uploading Frames"):
+                                s3_client.upload_file(frame, s3_bucket, frame)
                                 os.remove(frame)
                             os.rmdir(out_folder)
                         else:
