@@ -170,6 +170,7 @@ def extractFrames(video_path, stride=2, target_dim=(796, 448)):
         if not ret: break
 
         if count % stride == 0:
+            frame = cv2.resize(frame, target_dim)
             cv2.imwrite(os.path.join(out_folder, f"frame{count}.jpg"), frame)
             progress = f"Extracting {video_file} {count}/{num_frames} {count / num_frames * 100:.2f}%"
             print(progress, end="\r", flush=True)  # Overwrite the same line
